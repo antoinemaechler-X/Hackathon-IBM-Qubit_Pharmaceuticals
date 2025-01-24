@@ -1,5 +1,4 @@
 # main.py
-
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
@@ -7,117 +6,82 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
+import joblib
 
-
-
-# On importe la fonction de création de modèles
-from models import create_model  # <-- module que vous avez créé
+from models import create_model  # votre module qui crée un modèle vierge
 
 def load_and_prepare_data(csv_path, target_col, drop_cols=None, test_size=0.2, random_state=42):
-    # 1. Chargement
     df = pd.read_csv(csv_path)
-
-    # 2. Suppression de colonnes inutiles
     if drop_cols is not None:
         df.drop(columns=drop_cols, inplace=True, errors='ignore')
-    
-    # 3. Séparation features / target
     X = df.drop(columns=[target_col])
     y = df[target_col]
-    
-    # 4. Division en train / test
     X_train, X_test, y_train, y_test = train_test_split(
         X, y,
         test_size=test_size,
         random_state=random_state,
         stratify=y
     )
-    
     return X_train, X_test, y_train, y_test
 
-def train_and_evaluate(model, X_train, X_test, y_train, y_test, do_scaling=True):
-    # Construction d'un pipeline simple (scaler + modèle), si nécessaire
+def train_and_save_model(model_name, model_params, X_train, y_train, do_scaling=True, save_path="mon_modele_preentraine.pkl"):
+    # Créer un pipeline
     steps = []
     if do_scaling:
         steps.append(('scaler', StandardScaler()))
+    
+    # Modèle vierge
+    model = create_model(
+        model_name=model_name,
+        random_state=42,
+        **model_params
+    )
     steps.append(('classifier', model))
     
     pipeline = Pipeline(steps)
     
-    # Entraînement
+    # Entraîner
     pipeline.fit(X_train, y_train)
     
-    # Prédictions
-    y_pred = pipeline.predict(X_test)
-    
-    # Évaluation
-    print("\n===== ÉVALUATION DU MODÈLE =====")
-    accuracy = accuracy_score(y_test, y_pred)
-    print("Accuracy :", accuracy)
-    
-    print("\nClassification Report :")
-    print(classification_report(y_test, y_pred))
-    
-    # Matrice de confusion
-    cm = confusion_matrix(y_test, y_pred)
-    plt.figure(figsize=(5,4))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    plt.title("Matrice de confusion")
-    plt.xlabel("Prédictions")
-    plt.ylabel("Vérités terrain")
-    plt.show()
+    # Sauvegarder
+    joblib.dump(pipeline, save_path)
+    print(f"Modèle enregistré sous '{save_path}'.")
 
-def evaluate(model,data):
-    """
-    display metrics for the model
-    """
-    y_pred = model.predict(data)
-    print("\n===== ÉVALUATION DU MODÈLE =====")
+def load_pretrained_model(path):
+    return joblib.load(path)
+
+def evaluate_model(pipeline, X_test, y_test):
+    y_pred = pipeline.predict(X_test)
     accuracy = accuracy_score(y_test, y_pred)
     print("Accuracy :", accuracy)
-    
     print("\nClassification Report :")
     print(classification_report(y_test, y_pred))
-    
-    # Matrice de confusion
     cm = confusion_matrix(y_test, y_pred)
     plt.figure(figsize=(5,4))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    plt.title("Matrice de confusion")
+    plt.title("Matrice de confusion (modèle pré-entraîné)")
     plt.xlabel("Prédictions")
     plt.ylabel("Vérités terrain")
     plt.show()
 
 if __name__ == "__main__":
-    # Paramètres de base
+    # Paramètres
     CSV_PATH = "data/train.csv"
-    TARGET_COL = "class"   # Nom de la colonne cible
-    DROP_COLS = ["smiles"]      # Exemple
-    TEST_SIZE = 0.2
-    RANDOM_STATE = 42
-
-    # Chargement et préparation
+    TARGET_COL = "class"
+    DROP_COLS = ["smiles"]
+    
+    # Charger les données
     X_train, X_test, y_train, y_test = load_and_prepare_data(
         CSV_PATH,
         target_col=TARGET_COL,
-        drop_cols=DROP_COLS,
-        test_size=TEST_SIZE,
-        random_state=RANDOM_STATE
-    )
-
-    # CHOIX DU MODÈLE : juste en changeant 'model_name', on change d'algo
-    # ex: "random_forest", "logistic_regression", "svc" 
-    model_name = "xgboost"  
-    model_params = {
-        "n_estimators": 100  # ex. paramètre spécifique à RandomForest
-    }
-
-    # Création du modèle à partir de models.py
-    model = create_model(
-        model_name=model_name, 
-        random_state=RANDOM_STATE, 
-        **model_params
+        drop_cols=DROP_COLS
     )
     
-    # Entraînement et évaluation
-    train_and_evaluate(model, X_train, X_test, y_train, y_test, do_scaling=True)
+    # 1) ENTRAINER ET SAUVEGARDER UN MODELE
+    model_name = "xgboost"
+    model_params = {"n_estimators": 100}
+    train_and_save_model(model_name, model_params, X_train, y_train, save_path="mon_xgb_pipeline.pkl")
+    
+    # 2) CHARGER UN MODELE PRE-ENTRAINE ET L'EVALUER
+    pretrained_pipeline = load_pretrained_model("mon_xgb_pipeline.pkl")
+    evaluate_model(pretrained_pipeline, X_test, y_test)
