@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
+from sklearn.decomposition import PCA
 
 class fingerprintDataset(Dataset):
     def __init__(self, X_data, y_data):
@@ -65,7 +66,7 @@ def train_dnn_with_dataloader(X_train, y_train, model, batch_size=32, learning_r
             print(f"Train Accuracy: {acc:.4f}")
     
     # Sauvegarder le modèle entraîné
-    torch.save(model.state_dict(), name)
+    torch.save(model.state_dict(), "DeepHIT/weights/"+name)
     print(f"Model trained and saved as {name}")
 
 
@@ -97,28 +98,37 @@ def predict_dnn(model, X_test):
 if __name__ == '__main__':
     # Charger les données
     data = pd.read_csv("data/train.csv")
-    X, smiles_list = utils.extract_selected_features(data)
+
+    # Extraire toutes les colonnes qui commencent par 'ecfc'
+    ecfc_columns = [col for col in data.columns if col.startswith('ecfc')]
+    X = data[ecfc_columns]
     y = data['class']
-    # X is a dataframe of features, put it in a numpy array
+
+    # Convertir X en numpy array
     X = X.to_numpy()
 
+    # --- INSERT PCA HERE ---
+    # Choisissez un nombre de composantes, ex: 50 ou 0.95 (pour variance cumulée)
+    pca = PCA(n_components=30)
+    X_pca = pca.fit_transform(X)
+
     #split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X_pca, y, test_size=0.2, random_state=42)
 
     input_size = X_train.shape[1]  # Nombre de features
-    hidden_nodes = 892  # Nombre de neurones dans chaque couche cachée
-    hidden_layers = 4 # Nombre de couches cachées
-    dropout_rate = 0.3  # Taux de dropout
+    hidden_nodes = 1024  # Nombre de neurones dans chaque couche cachée
+    hidden_layers = 3 # Nombre de couches cachées
+    dropout_rate = 0.5  # Taux de dropout
     
 
     # Initialiser le modèle DNN
     model = models.DescriptorBasedDNN(input_size, hidden_nodes, hidden_layers, dropout_rate)
     
     # Entraîner le modèle
-    trained_model = train_dnn_with_dataloader(X_train, y_train, model, learning_rate=0.0001, epochs=100, name="descriptor_based_dnn.pth")
+    trained_model = train_dnn_with_dataloader(X_train, y_train, model, learning_rate=0.001, epochs=100, name="fingerprint_dnn.pth",batch_size=32)
 
     # Charger le modèle entraîné
-    model.load_state_dict(torch.load("descriptor_based_dnn.pth"))
+    model.load_state_dict(torch.load("DeepHIT/weights/fingerprint_dnn.pth"))
     model.eval()  # Passer le modèle en mode évaluation
     
     # Prédiction  # Exemple de données de test

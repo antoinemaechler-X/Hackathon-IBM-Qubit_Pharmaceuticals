@@ -115,10 +115,10 @@ if __name__ == '__main__':
     model = models.DescriptorBasedDNN(input_size, hidden_nodes, hidden_layers, dropout_rate)
     
     # Entraîner le modèle
-    trained_model = train_dnn_with_dataloader(X_train, y_train, model, learning_rate=0.0001, epochs=100, name="descriptor_based_dnn.pth")
+    trained_model = train_dnn_with_dataloader(X_train, y_train, model, learning_rate=0.0001, epochs=100, name="DeepHIT/weights/descriptor_based_dnn.pth")
 
     # Charger le modèle entraîné
-    model.load_state_dict(torch.load("descriptor_based_dnn.pth"))
+    model.load_state_dict(torch.load("DeepHIT/weights/descriptor_based_dnn.pth"))
     model.eval()  # Passer le modèle en mode évaluation
     
     # Prédiction  # Exemple de données de test

@@ -75,7 +75,6 @@ def train_gcn(model, X_train, A_train, Y_train, epochs=100, learning_rate=0.01, 
     # Sauvegarder le modèle entraîné
     torch.save(model.state_dict(), name)
 
-    
 
     
     return model
@@ -110,10 +109,10 @@ if __name__ == '__main__':
     model = models.GCN_Model(num_features, gcn_hidden_nodes, gcn_hidden_layers, dnn_hidden_nodes, dnn_hidden_layers,dropout_rate=0.1)
     
     # Entraîner le modèle
-    trained_model = train_gcn(model, X_train, A_train, y_train, learning_rate=0.0001, epochs=100, name="descriptor_based_dnn.pth")
+    trained_model = train_gcn(model, X_train, A_train, y_train, learning_rate=0.0001, epochs=100, name="gcn.pth")
 
     # Charger le modèle entraîné
-    model.load_state_dict(torch.load("descriptor_based_dnn.pth"))
+    model.load_state_dict(torch.load("gcn.pth"))
     model.eval()  # Passer le modèle en mode évaluation
     
     # Prédiction sur les données de test
