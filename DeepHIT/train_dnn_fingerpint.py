@@ -6,135 +6,136 @@ import torch.optim as optim
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from torch.utils.data import Dataset, DataLoader
 from sklearn.decomposition import PCA
+from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
 
-class fingerprintDataset(Dataset):
+# Define Dataset Class
+class FingerprintDataset(Dataset):
+    """
+    Dataset for handling fingerprint-based features and labels for PyTorch DataLoader.
+    """
     def __init__(self, X_data, y_data):
         self.X = torch.tensor(X_data, dtype=torch.float32)
-        self.y = torch.tensor(y_data, dtype=torch.float32).view(-1, 1)  # reshape y pour correspondre à la forme (batch_size, 1)
-        
+        self.y = torch.tensor(y_data, dtype=torch.float32).view(-1, 1)  # Reshape to match (batch_size, 1)
+
     def __len__(self):
-        return len(self.X)  # Le nombre d'exemples dans le dataset
-    
+        return len(self.X)
+
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-# Fonction de training avec DataLoader
-def train_dnn_with_dataloader(X_train, y_train, model, batch_size=32, learning_rate=0.001, epochs=100, name="descriptor_based_dnn_with_dataloader.pth"):
-    # Initialiser le modèle
-    
-    # Fonction de perte
+# Define Training Function
+def train_dnn_with_dataloader(X_train, y_train, model, batch_size=32, learning_rate=0.001, epochs=100, save_path="descriptor_based_dnn.pth"):
+    """
+    Train a DNN model using a PyTorch DataLoader.
+    """
+    # Loss function and optimizer
     criterion = nn.BCELoss()
-    
-    # Optimiseur
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    
-    # Créer le dataset et le DataLoader
-    dataset = fingerprintDataset(X_train, y_train)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    X_train_tensor = torch.tensor(X_train, dtype=torch.float32).to(device)
+
+    # DataLoader for batch processing
+    dataset = FingerprintDataset(X_train, y_train)
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    
-    # Entraînement du modèle
+
+    # Training loop with progress bar
     for epoch in range(epochs):
         model.train()
-        
         running_loss = 0.0
-        for i, (inputs, labels) in enumerate(train_loader):
-            # Passage avant
+
+        for inputs, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False):
+            inputs, labels = inputs.to(device), labels.to(device)
+            # Forward pass
             y_pred = model(inputs)
-            
-            # Calcul de la perte
+
+
+            # Compute loss
             loss = criterion(y_pred, labels)
-            
-            # Passage arrière
-            optimizer.zero_grad()  # Réinitialiser les gradients
-            loss.backward()  # Calculer les gradients
-            optimizer.step()  # Mettre à jour les poids
-            
+
+            # Backward pass and optimization
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
             running_loss += loss.item()
-        
-        # Affichage de la perte moyenne après chaque époque
-        if (epoch + 1) % 10 == 0:
-            print(f"Epoch [{epoch+1}/{epochs}], Loss: {running_loss/len(train_loader):.4f}")
-            num_samples = len(X_train)
-            X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+
+        # Log epoch loss
+        if epoch % 10 == 0:
             model.eval()
-            y_pred = model(X_train_tensor).squeeze()
-            y_pred = y_pred.round()
-            y_pred = y_pred.detach().numpy()
-            acc = (y_pred == y_train).sum().item() / num_samples
-            print(f"Train Accuracy: {acc:.4f}")
-    
-    # Sauvegarder le modèle entraîné
-    torch.save(model.state_dict(), "DeepHIT/weights/"+name)
-    print(f"Model trained and saved as {name}")
+            avg_loss = running_loss / len(train_loader)
+            train_acc = np.mean(predict_dnn(model, X_train) == y_train)
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}, Accuracy: {train_acc:.4f}")
 
+    # Save the trained model
+    torch.save(model.state_dict(), save_path)
+    print(f"Model trained and saved at {save_path}")
 
-def predict_dnn(model, X_test):
+# Define Prediction Function
+def predict_dnn(model: nn.Module, X_test: np.ndarray) -> np.ndarray:
     """
-    Effectue des prédictions sur de nouvelles données.
+    Predict using a trained PyTorch model.
     
-    :param model: Le modèle préalablement entraîné.
-    :param X_test: Les nouvelles données pour lesquelles prédire les résultats.
-    :return: Les prédictions effectuées par le modèle.
-    """
-    model.eval()  # Mettre le modèle en mode évaluation
-    with torch.no_grad():  # Désactiver le calcul des gradients pour accélérer la prédiction
-        # Convertir les données d'entrée en tenseur
-        X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
+    Args:
+        model: Trained PyTorch model.
+        X_test: Test features.
         
-        # Effectuer les prédictions
+    Returns:
+        Binary predictions as a NumPy array.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device).eval()
+    
+    with torch.no_grad():
+        X_test_tensor = torch.tensor(X_test, dtype=torch.float32).to(device)
         y_pred = model(X_test_tensor).squeeze()
-        
-        # Appliquer un seuil de 0.5 pour la classification binaire
-        y_pred_class = y_pred.round() # Convertir en 0 ou 1
-        y_pred_class = y_pred_class.numpy()
-        
-    return y_pred_class
+        return y_pred.round().cpu().numpy()
 
 
-
-
+# Main Execution
 if __name__ == '__main__':
-    # Charger les données
+    # Load and preprocess the dataset
     data = pd.read_csv("data/train.csv")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Extraire toutes les colonnes qui commencent par 'ecfc'
+    # Extract fingerprint features (columns starting with 'ecfc') and target labels
     ecfc_columns = [col for col in data.columns if col.startswith('ecfc')]
-    X = data[ecfc_columns]
-    y = data['class']
+    X = data[ecfc_columns].to_numpy()
+    y = data['class'].to_numpy()
 
-    # Convertir X en numpy array
-    X = X.to_numpy()
-
-    # --- INSERT PCA HERE ---
-    # Choisissez un nombre de composantes, ex: 50 ou 0.95 (pour variance cumulée)
-    pca = PCA(n_components=30)
+    # Apply PCA to reduce dimensionality of the fingerprints
+    pca = PCA(n_components=30)  # Retain 30 principal components
     X_pca = pca.fit_transform(X)
 
-    #split
-    X_train, X_test, y_train, y_test = train_test_split(X_pca, y, test_size=0.2, random_state=42)
+    train_indices = np.load("DeepHIT/weights/train_indices.npy")
+    test_indices = np.load("DeepHIT/weights/test_indices.npy")
 
-    input_size = X_train.shape[1]  # Nombre de features
-    hidden_nodes = 1024  # Nombre de neurones dans chaque couche cachée
-    hidden_layers = 3 # Nombre de couches cachées
-    dropout_rate = 0.5  # Taux de dropout
-    
+    X_train, X_test = X_pca[train_indices], X_pca[test_indices]
+    y_train, y_test = y[train_indices], y[test_indices]
 
-    # Initialiser le modèle DNN
+    # Define DNN model parameters
+    input_size = X_train.shape[1]
+    hidden_nodes = 1024
+    hidden_layers = 3
+    dropout_rate = 0.5
+
+    # Initialize the DNN model
     model = models.DescriptorBasedDNN(input_size, hidden_nodes, hidden_layers, dropout_rate)
-    
-    # Entraîner le modèle
-    trained_model = train_dnn_with_dataloader(X_train, y_train, model, learning_rate=0.001, epochs=100, name="fingerprint_dnn.pth",batch_size=32)
+    model.to(device)
 
-    # Charger le modèle entraîné
+    # Train the model
+    train_dnn_with_dataloader(X_train, y_train, model, batch_size=32, learning_rate=0.001, epochs=100, save_path="DeepHIT/weights/fingerprint_dnn.pth")
+
+    # Load the trained model
     model.load_state_dict(torch.load("DeepHIT/weights/fingerprint_dnn.pth"))
-    model.eval()  # Passer le modèle en mode évaluation
-    
-    # Prédiction  # Exemple de données de test
+    model.eval()
+
+    # Make predictions on the test set
     y_pred = predict_dnn(model, X_test)
-    # accuracy
-    print(y_pred[0:10])
-    print(y_test[0:5])
-    accuracy = (y_pred == y_test).sum().item() / len(y_test)
-    print(f"Accuracy: {accuracy:.4f}")
+
+    # Evaluate model accuracy
+    accuracy = np.mean(y_pred == y_test)
+    print(f"Accuracy on test set: {accuracy:.4f}")
