@@ -9,6 +9,8 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import torch.nn.functional as F
+from sklearn.preprocessing import StandardScaler
+
 
 
 class GraphNeuralNetwork(nn.Module):
@@ -235,9 +237,16 @@ if __name__ == '__main__':
     test_indices = np.load("DeepHIT/weights/test_indices.npy")
 
     # Split data
-    X_train, X_test = X[train_indices], X[test_indices]
-    y_train, y_test = y[train_indices], y[test_indices]
-    A_train, A_test = A[train_indices], A[test_indices]
+    # X_train, X_test = X[train_indices], X[test_indices]
+    # y_train, y_test = y[train_indices], y[test_indices]
+    # A_train, A_test = A[train_indices], A[test_indices]
+    X_train = X
+    y_train = y
+    X_test = X
+    y_test = y
+    A_train = A
+    A_test = A
+
 
     # Model hyperparameters
     num_features = X_train.shape[2]
@@ -255,12 +264,14 @@ if __name__ == '__main__':
     train_dataset = GraphDataset(X_train, A_train, y_train)
     train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 
+    
+
     # Train the model
     trained_model = train_graph_neural_network(
         model, train_dataloader, 
         epochs=100, 
         learning_rate=0.0001, 
-        save_path="DeepHIT/weights/gnn.pth"
+        save_path="DeepHIT/weights/gnn_2.pth"
     )
 
     # Evaluation

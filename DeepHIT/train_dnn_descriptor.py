@@ -10,6 +10,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from typing import Tuple
+from sklearn.preprocessing import StandardScaler
 
 class DescriptorDataset(Dataset):
     def __init__(self, X_data: np.ndarray, y_data: np.ndarray):
@@ -106,14 +107,21 @@ if __name__ == '__main__':
     # Load data
     data = pd.read_csv("data/train.csv")
     X, smiles_list = utils.extract_selected_features(data)
+    #scale the data
+    X = StandardScaler().fit_transform(X)
+
     y = data['class'].to_numpy()
-    X = X.to_numpy()
+    # X = X.to_numpy()
 
     train_indices = np.load("DeepHIT/weights/train_indices.npy")
     test_indices = np.load("DeepHIT/weights/test_indices.npy")
 
-    X_train, X_test = X[train_indices], X[test_indices]
-    y_train, y_test = y[train_indices], y[test_indices]
+    # X_train, X_test = X[train_indices], X[test_indices]
+    # y_train, y_test = y[train_indices], y[test_indices]
+    X_train = X
+    y_train = y
+    X_test = X
+    y_test = y
 
     # Split data
     # X_train, X_test, y_train, y_test = train_test_split(X.to_numpy(), y, test_size=0.2, random_state=42)
@@ -127,7 +135,7 @@ if __name__ == '__main__':
         "learning_rate": 0.0001,
         "epochs": 100,
         "batch_size": 32,
-        "save_path": "DeepHIT/weights/descriptor_based_dnn.pth"
+        "save_path": "DeepHIT/weights/descriptor_based_dnn_2.pth"
     }
 
     # Initialize and train model

@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
+import gnn
 
 
 def prepare_descriptor_data(X_train_raw, X_test_raw):
@@ -69,30 +70,52 @@ if __name__ == '__main__':
 
     # Graph-based GCN
     X_g_train, A_train, X_g_test, A_test = prepare_graph_data(X_train_raw, X_test_raw)
-    graph_model = models.GCN_Model(
-        in_features=X_g_train.shape[2],
-        gcn_hidden_nodes=64,
-        gcn_hidden_layers=3,
-        dnn_hidden_nodes=1024,
-        dnn_hidden_layers=2,
-        dropout_rate=0.1
-    )
-    graph_model.load_state_dict(torch.load("DeepHIT/weights/gcn.pth"))
-    graph_model.eval()
+    # graph_model = models.GCN_Model(
+    #     in_features=X_g_train.shape[2],
+    #     gcn_hidden_nodes=64,
+    #     gcn_hidden_layers=3,
+    #     dnn_hidden_nodes=1024,
+    #     dnn_hidden_layers=2,
+    #     dropout_rate=0.1
+    # )
+    # graph_model.load_state_dict(torch.load("DeepHIT/weights/gcn.pth"))
+    # graph_model.eval()
 
+        # Graph-based GNN (updated from previous implementation)
+    X_g_train, A_train, X_g_test, A_test = prepare_graph_data(X_train_raw, X_test_raw)
+    
+    # Configuration for the GNN
+    num_features = X_g_train.shape[2]
+    gnn_params = {
+        'num_features': num_features,
+        'hidden_channels': 64,  # Reduced from 128
+        'num_gcn_layers': 3,
+        'dnn_hidden_nodes': 256,  # Adjusted
+        'num_dnn_layers': 2,
+        'dropout_rate': 0.2
+    }
+    graph_model = gnn.GraphNeuralNetwork(**gnn_params)
+    graph_model.load_state_dict(torch.load("DeepHIT/weights/gnn.pth"))
+    graph_model.eval()
     # Predict
     with torch.no_grad():
         y_pred_d = descriptor_model(torch.tensor(X_d_test, dtype=torch.float32)).squeeze().round().numpy()
         y_pred_f = fingerprint_model(torch.tensor(X_f_test, dtype=torch.float32)).squeeze().round().numpy()
-        y_pred_g = graph_model(
+        y_pred_g = torch.sigmoid(graph_model(
             torch.tensor(X_g_test, dtype=torch.float32),
             torch.tensor(A_test, dtype=torch.float32)
-        ).squeeze().round().numpy()
+        )).squeeze().round().numpy()
 
-        # Combine predictions: return 1 if any model predicts 1
-        y_pred = (y_pred_d + y_pred_f + y_pred_g) > 0
-        y_pred = y_pred.astype(int)
+        # Combine predictions: return 1 if majority of models predict 1
+        y_pred = ((y_pred_d + y_pred_f + y_pred_g) >= 2).astype(int)
 
         # Evaluate accuracy
         accuracy = np.mean(y_pred == y_test.to_numpy())
         print(f"Accuracy on test set: {accuracy:.4f}")
+
+        # Optional: More detailed evaluation
+        from sklearn.metrics import classification_report, confusion_matrix
+        print("\nClassification Report:")
+        print(classification_report(y_test, y_pred))
+        print("\nConfusion Matrix:")
+        print(confusion_matrix(y_test, y_pred))

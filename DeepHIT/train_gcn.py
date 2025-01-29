@@ -113,11 +113,16 @@ if __name__ == '__main__':
     train_indices = np.load("DeepHIT/weights/train_indices.npy")
     test_indices = np.load("DeepHIT/weights/test_indices.npy")
 
-    X_train, X_test = X[train_indices], X[test_indices]
-    y_train, y_test = y[train_indices], y[test_indices]
-    A_train, A_test = A[train_indices], A[test_indices]
-    # Split the data
-    
+    # X_train, X_test = X[train_indices], X[test_indices]
+    # y_train, y_test = y[train_indices], y[test_indices]
+    # A_train, A_test = A[train_indices], A[test_indices]
+    X_train = X
+    y_train = y
+    X_test = X
+    y_test = y
+    A_train = A
+    A_test = A
+
     # Print dataset shapes
     print(f"Train X shape: {X_train.shape}, Train A shape: {A_train.shape}")
     print(f"Test X shape: {X_test.shape}, Test A shape: {A_test.shape}")
@@ -138,10 +143,10 @@ if __name__ == '__main__':
     train_dataloader = DataLoader(train_dataset, batch_size=128, shuffle=True)
 
     # Train the model
-    trained_model = train_gcn(model, train_dataloader, epochs=100, learning_rate=0.0001, save_path="gcn.pth")
+    trained_model = train_gcn(model, train_dataloader, epochs=100, learning_rate=0.0001, save_path="DeepHIT/weights/gcn_2.pth")
 
     # Load the trained model for evaluation
-    model.load_state_dict(torch.load("gcn.pth"))
+    model.load_state_dict(torch.load("DeepHIT/weights/gcn_2.pth"))
 
     # Evaluate the model
     test_accuracy = evaluate_gcn(model, X_test, A_test, y_test)

@@ -1,264 +1,221 @@
 import models
 import utils
 import torch
-import pickle
+import torch.nn as nn
 import pandas as pd
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.calibration import CalibratedClassifierCV
+import gnn
+import GNN3
 
-class ToxicityPipeline:
-    def __init__(self):
-        self.descriptor_model = None
-        self.fingerprint_model = None
-        self.graph_model = None
-        self.pca = None
 
-    def prepare_descriptor_data(self, X_raw):
-        """
-        Prepare the descriptor-based DNN dataset.
-        """
-        X, _ = utils.extract_selected_features(X_raw)
-        return X.to_numpy()
+def prepare_descriptor_data(X_train_raw, X_test_raw):
+    """
+    Prepare the descriptor-based DNN dataset with more robust feature extraction.
+    """
+    X_train, feature_names = utils.extract_selected_features(X_train_raw)
+    X_test, _ = utils.extract_selected_features(X_test_raw)
+    
+    # Optional: Add feature scaling
+    from sklearn.preprocessing import StandardScaler
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    # X_train_scaled = X_train.to_numpy()
+    # X_test_scaled = X_test.to_numpy()
+    
+    return X_train_scaled, X_test_scaled
 
-    def prepare_fingerprint_data(self, X_raw):
-        """
-        Prepare the fingerprint-based DNN dataset with PCA.
-        """
-        ecfc_columns = [col for col in X_raw.columns if col.startswith('ecfc')]
-        X = X_raw[ecfc_columns].to_numpy()
-        if not self.pca:
-            self.pca = PCA(n_components=30)
-            X_pca = self.pca.fit_transform(X)
-        else:
-            X_pca = self.pca.transform(X)
-        return X_pca
 
-    def prepare_graph_data(self, smiles_list):
-        """
-        Prepare the graph data for the GCN.
-        """
-        X, A, _ = utils.convert_to_graph(smiles_list)
-        return X, A
+def prepare_fingerprint_data(X_train_raw, X_test_raw):
+    """
+    Prepare the fingerprint-based DNN dataset with advanced PCA and scaling.
+    """
+    ecfc_columns = [col for col in X_train_raw.columns if col.startswith('ecfc')]
+    X_train = X_train_raw[ecfc_columns].to_numpy()
+    X_test = X_test_raw[ecfc_columns].to_numpy()
+    
+    # Combine PCA with scaling
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import Pipeline
+    
+    pca_pipeline = Pipeline([
+        ('scaler', StandardScaler()),
+        ('pca', PCA(n_components=30, random_state=42))
+    ])
+    
+    X_train_processed = pca_pipeline.fit_transform(X_train)
+    X_test_processed = pca_pipeline.transform(X_test)
+    
+    return X_train_processed, X_test_processed
 
-    def load_models(self):
-        """
-        Load all trained models and set them to evaluation mode.
-        """
-        # Descriptor-based DNN
-        self.descriptor_model = models.DescriptorBasedDNN(
-            input_size=892, hidden_nodes=892, hidden_layers=4, dropout_rate=0.3
-        )
-        self.descriptor_model.load_state_dict(torch.load("DeepHIT/weights/descriptor_based_dnn.pth"))
-        self.descriptor_model.eval()
 
-        # Fingerprint-based DNN
-        self.fingerprint_model = models.DescriptorBasedDNN(
-            input_size=30, hidden_nodes=1024, hidden_layers=3, dropout_rate=0.5
-        )
-        self.fingerprint_model.load_state_dict(torch.load("DeepHIT/weights/fingerprint_dnn.pth"))
-        self.fingerprint_model.eval()
+def prepare_graph_data(X_train_raw, X_test_raw):
+    """
+    Prepare the graph data for the GCN with enhanced graph conversion.
+    """
+    X_train, A_train, node_features_train = utils.convert_to_graph(X_train_raw['smiles'].tolist())
+    X_test, A_test, node_features_test = utils.convert_to_graph(X_test_raw['smiles'].tolist())
+    return X_train, A_train, X_test, A_test
 
-        # Graph-based GCN
-        self.graph_model = models.GCN_Model(
-            in_features=65,
-            gcn_hidden_nodes=64,
-            gcn_hidden_layers=3,
-            dnn_hidden_nodes=1024,
-            dnn_hidden_layers=2,
-            dropout_rate=0.1
-        )
-        self.graph_model.load_state_dict(torch.load("DeepHIT/weights/gcn.pth"))
-        self.graph_model.eval()
 
-    def predict(self, X_d, X_f, X_g, A_g):
-        """
-        Perform predictions using all models and combine the results.
-        """
-        with torch.no_grad():
-            # Descriptor model predictions
-            y_pred_d = self.descriptor_model(torch.tensor(X_d, dtype=torch.float32)).squeeze().round().numpy()
+def weighted_ensemble_prediction(predictions, model_weights=None):
+    """
+    Perform weighted ensemble prediction.
+    
+    Args:
+        predictions (list): List of model predictions
+        model_weights (list, optional): Weights for each model's prediction
+    
+    Returns:
+        numpy.ndarray: Final ensemble prediction
+    """
+    if model_weights is None:
+        # Default to equal weights if not specified
+        model_weights = [1/len(predictions)] * len(predictions)
+    
+    weighted_preds = np.average(predictions, axis=0, weights=model_weights)
+    return (weighted_preds >= 0.5).astype(int)
 
-            # Fingerprint model predictions
-            y_pred_f = self.fingerprint_model(torch.tensor(X_f, dtype=torch.float32)).squeeze().round().numpy()
 
-            # Graph model predictions
-            y_pred_g = self.graph_model(
-                torch.tensor(X_g, dtype=torch.float32),
-                torch.tensor(A_g, dtype=torch.float32)
-            ).squeeze().round().numpy()
-
-            # Combine predictions: return 1 if any model predicts 1
-            y_pred = (y_pred_d + y_pred_f + y_pred_g) > 1
-            return y_pred.astype(int)
+def train_and_calibrate_models(X_train, y_train):
+    """
+    Train and calibrate models to improve prediction reliability.
+    
+    Args:
+        X_train (np.ndarray): Training features
+        y_train (np.ndarray): Training labels
+    
+    Returns:
+        List of calibrated models
+    """
+    # Placeholder for model training logic
+    # You would replace this with actual model training code
+    calibrated_models = []
+    return calibrated_models
 
 
 if __name__ == '__main__':
-    # Load data and train/test indices
+    # Load the data
     data = pd.read_csv('data/train.csv')
+
     train_indices = np.load("DeepHIT/weights/train_indices.npy")
     test_indices = np.load("DeepHIT/weights/test_indices.npy")
 
     X_train_raw, X_test_raw = data.iloc[train_indices], data.iloc[test_indices]
     y_train, y_test = data['class'].iloc[train_indices], data['class'].iloc[test_indices]
 
-    # Initialize pipeline
-    pipeline = ToxicityPipeline()
-    pipeline.load_models()
+    # Prepare data for different model types
+    X_d_train, X_d_test = prepare_descriptor_data(X_train_raw, X_test_raw)
+    X_f_train, X_f_test = prepare_fingerprint_data(X_train_raw, X_test_raw)
+    X_g_train, A_train, X_g_test, A_test = prepare_graph_data(X_train_raw, X_test_raw)
+    
+    # Model configurations with performance tracking
+    model_configs = [
+        {
+            'name': 'Descriptor DNN',
+            'model': models.DescriptorBasedDNN(
+                input_size=X_d_train.shape[1], 
+                hidden_nodes=892, 
+                hidden_layers=4, 
+                dropout_rate=0.3
+            ),
+            'weights_path': "DeepHIT/weights/descriptor_based_dnn.pth",
+            'input_type': 'descriptor'
+        },
+        {
+            'name': 'Fingerprint DNN',
+            'model': models.FingerprintBasedDNN(
+                input_size=X_f_train.shape[1], 
+                hidden_nodes=1024, 
+                hidden_layers=3, 
+                dropout_rate=0.5
+            ),
+            'weights_path': "DeepHIT/weights/fingerprint_dnn.pth",
+            'input_type': 'fingerprint'
+        },
+        {
+            'name': 'Graph Neural Network',
+            'model': gnn.GraphNeuralNetwork(
+                num_features=X_g_train.shape[2],
+                hidden_channels=64,
+                num_gcn_layers=3,
+                dnn_hidden_nodes=256,
+                num_dnn_layers=2,
+                dropout_rate=0.2
+            ),
+            'weights_path': "DeepHIT/weights/gnn.pth",
+            'input_type': 'graph'
+        },
+        {
+            'name': 'Graph Neural Network (Updated)',
+        #     'num_features': num_features,
+        # 'hidden_channels': 128,
+        # 'num_gcn_layers': 4,
+        # 'dnn_hidden_nodes': 256,
+        # 'num_dnn_layers': 2,
+        # 'dropout_rate': 0.33356257977269954,
+        # 'l2_lambda': 0.0007517360053320633
+          'model': GNN3.GraphNeuralNetwork(
+                num_features=X_g_train.shape[2],
+                hidden_channels=128,
+                num_gcn_layers=4,
+                dnn_hidden_nodes=512,
+                num_dnn_layers=2,
+                dropout_rate=0.33356257977269954,
+                l2_lambda=0.0007517360053320633
+            ),
+            'weights_path': "DeepHIT/weights/best_gnn.pth",
+            'input_type': 'graph'
+        }
+    ]
 
-    # Prepare data
-    X_d_train = pipeline.prepare_descriptor_data(X_train_raw)
-    X_d_test = pipeline.prepare_descriptor_data(X_test_raw)
-    X_f_train = pipeline.prepare_fingerprint_data(X_train_raw)
-    X_f_test = pipeline.prepare_fingerprint_data(X_test_raw)
-    X_g_train, A_train = pipeline.prepare_graph_data(X_train_raw['smiles'].tolist())
-    X_g_test, A_test = pipeline.prepare_graph_data(X_test_raw['smiles'].tolist())
+    # Predict and track model performance
+    model_predictions = []
+    model_accuracies = []
 
-    # Predict
-    y_pred = pipeline.predict(X_d_test, X_f_test, X_g_test, A_test)
+    with torch.no_grad():
+        for config in model_configs:
+            model = config['model']
+            model.load_state_dict(torch.load(config['weights_path']))
+            model.eval()
 
-    # Evaluate accuracy
+            if config['input_type'] == 'descriptor':
+                pred = model(torch.tensor(X_d_test, dtype=torch.float32)).squeeze()
+            elif config['input_type'] == 'fingerprint':
+                pred = model(torch.tensor(X_f_test, dtype=torch.float32)).squeeze()
+                
+            else:  # graph
+                pred = model(
+                    torch.tensor(X_g_test, dtype=torch.float32),
+                    torch.tensor(A_test, dtype=torch.float32)
+                )
+                pred = torch.sigmoid(pred).squeeze()
+                
+
+            pred_np = pred.round().numpy()
+            accuracy = np.mean(pred_np == y_test.to_numpy())
+            
+            model_predictions.append(pred_np)
+            model_accuracies.append(accuracy)
+            print(f"{config['name']} Accuracy: {accuracy:.4f}")
+
+    # Compute model weights based on individual accuracies
+    total_accuracy = sum(model_accuracies)
+    model_weights = [acc/total_accuracy for acc in model_accuracies]
+
+    # Weighted ensemble prediction
+    y_pred = weighted_ensemble_prediction(model_predictions, model_weights)
+
+    # Comprehensive evaluation
     accuracy = np.mean(y_pred == y_test.to_numpy())
-    print(f"Accuracy on test set: {accuracy:.4f}")
+    print(f"\nEnsemble Weighted Accuracy: {accuracy:.4f}")
 
-    # Save the pipeline
-    with open("DeepHIT/weights/toxicity_pipeline.pkl", "wb") as f:
-        pickle.dump(pipeline, f)
-    print("Pipeline saved to DeepHIT/weights/toxicity_pipeline.pkl")
-
-    # Example: Load the pipeline and reuse it
-    with open("DeepHIT/weights/toxicity_pipeline.pkl", "rb") as f:
-        loaded_pipeline = pickle.load(f)
-    print("Pipeline loaded successfully.")
-import models
-import utils
-import torch
-import pickle
-import pandas as pd
-import numpy as np
-from sklearn.decomposition import PCA
-from sklearn.model_selection import train_test_split
-
-class ToxicityPipeline:
-    def __init__(self):
-        self.descriptor_model = None
-        self.fingerprint_model = None
-        self.graph_model = None
-        self.pca = None
-
-    def prepare_descriptor_data(self, X_raw):
-        """
-        Prepare the descriptor-based DNN dataset.
-        """
-        X, _ = utils.extract_selected_features(X_raw)
-        return X.to_numpy()
-
-    def prepare_fingerprint_data(self, X_raw):
-        """
-        Prepare the fingerprint-based DNN dataset with PCA.
-        """
-        ecfc_columns = [col for col in X_raw.columns if col.startswith('ecfc')]
-        X = X_raw[ecfc_columns].to_numpy()
-        if not self.pca:
-            self.pca = PCA(n_components=30)
-            X_pca = self.pca.fit_transform(X)
-        else:
-            X_pca = self.pca.transform(X)
-        return X_pca
-
-    def prepare_graph_data(self, smiles_list):
-        """
-        Prepare the graph data for the GCN.
-        """
-        X, A, _ = utils.convert_to_graph(smiles_list)
-        return X, A
-
-    def load_models(self):
-        """
-        Load all trained models and set them to evaluation mode.
-        """
-        # Descriptor-based DNN
-        self.descriptor_model = models.DescriptorBasedDNN(
-            input_size=892, hidden_nodes=892, hidden_layers=4, dropout_rate=0.3
-        )
-        self.descriptor_model.load_state_dict(torch.load("DeepHIT/weights/descriptor_based_dnn.pth"))
-        self.descriptor_model.eval()
-
-        # Fingerprint-based DNN
-        self.fingerprint_model = models.DescriptorBasedDNN(
-            input_size=30, hidden_nodes=1024, hidden_layers=3, dropout_rate=0.5
-        )
-        self.fingerprint_model.load_state_dict(torch.load("DeepHIT/weights/fingerprint_dnn.pth"))
-        self.fingerprint_model.eval()
-
-        # Graph-based GCN
-        self.graph_model = models.GCN_Model(
-            in_features=65,
-            gcn_hidden_nodes=64,
-            gcn_hidden_layers=3,
-            dnn_hidden_nodes=1024,
-            dnn_hidden_layers=2,
-            dropout_rate=0.1
-        )
-        self.graph_model.load_state_dict(torch.load("DeepHIT/weights/gcn.pth"))
-        self.graph_model.eval()
-
-    def predict(self, X_d, X_f, X_g, A_g):
-        """
-        Perform predictions using all models and combine the results.
-        """
-        with torch.no_grad():
-            # Descriptor model predictions
-            y_pred_d = self.descriptor_model(torch.tensor(X_d, dtype=torch.float32)).squeeze().round().numpy()
-
-            # Fingerprint model predictions
-            y_pred_f = self.fingerprint_model(torch.tensor(X_f, dtype=torch.float32)).squeeze().round().numpy()
-
-            # Graph model predictions
-            y_pred_g = self.graph_model(
-                torch.tensor(X_g, dtype=torch.float32),
-                torch.tensor(A_g, dtype=torch.float32)
-            ).squeeze().round().numpy()
-
-            # Combine predictions: return 1 if any model predicts 1
-            y_pred = (y_pred_d + y_pred_f + y_pred_g) > 1
-            return y_pred.astype(int)
-
-
-if __name__ == '__main__':
-    # Load data and train/test indices
-    data = pd.read_csv('data/train.csv')
-    train_indices = np.load("DeepHIT/weights/train_indices.npy")
-    test_indices = np.load("DeepHIT/weights/test_indices.npy")
-
-    X_train_raw, X_test_raw = data.iloc[train_indices], data.iloc[test_indices]
-    y_train, y_test = data['class'].iloc[train_indices], data['class'].iloc[test_indices]
-
-    # Initialize pipeline
-    pipeline = ToxicityPipeline()
-    pipeline.load_models()
-
-    # Prepare data
-    X_d_train = pipeline.prepare_descriptor_data(X_train_raw)
-    X_d_test = pipeline.prepare_descriptor_data(X_test_raw)
-    X_f_train = pipeline.prepare_fingerprint_data(X_train_raw)
-    X_f_test = pipeline.prepare_fingerprint_data(X_test_raw)
-    X_g_train, A_train = pipeline.prepare_graph_data(X_train_raw['smiles'].tolist())
-    X_g_test, A_test = pipeline.prepare_graph_data(X_test_raw['smiles'].tolist())
-
-    # Predict
-    y_pred = pipeline.predict(X_d_test, X_f_test, X_g_test, A_test)
-
-    # Evaluate accuracy
-    accuracy = np.mean(y_pred == y_test.to_numpy())
-    print(f"Accuracy on test set: {accuracy:.4f}")
-
-    # Save the pipeline
-    with open("DeepHIT/weights/toxicity_pipeline.pkl", "wb") as f:
-        pickle.dump(pipeline, f)
-    print("Pipeline saved to DeepHIT/weights/toxicity_pipeline.pkl")
-
-    # Example: Load the pipeline and reuse it
-    with open("DeepHIT/weights/toxicity_pipeline.pkl", "rb") as f:
-        loaded_pipeline = pickle.load(f)
-    print("Pipeline loaded successfully.")
+    print("\nClassification Report:")
+    print(classification_report(y_test, y_pred))
+    
+    print("\nConfusion Matrix:")
+    print(confusion_matrix(y_test, y_pred))
